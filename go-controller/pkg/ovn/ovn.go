@@ -22,6 +22,7 @@ import (
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 
 	egressfirewall "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/egressfirewall/v1"
+	extnetworkpolicy "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/extnetworkpolicy/v1alpha1"
 
 	apiextension "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	utilnet "k8s.io/utils/net"
@@ -47,6 +48,7 @@ const (
 	clusterPortGroupName             string        = "clusterPortGroup"
 	clusterRtrPortGroupName          string        = "clusterRtrPortGroup"
 	egressFirewallDNSDefaultDuration time.Duration = 30 * time.Minute
+	extnetworkpolicyCRD                            = "extnetworkpolicies.k8s.ovn.org"
 )
 
 // ServiceVIPKey is used for looking up service namespace information for a
@@ -120,11 +122,12 @@ type namespaceInfo struct {
 // Controller structure is the object which holds the controls for starting
 // and reacting upon the watched resources (e.g. pods, endpoints)
 type Controller struct {
-	client                clientset.Interface
-	kube                  kube.Interface
-	watchFactory          *factory.WatchFactory
-	egressFirewallHandler *factory.Handler
-	stopChan              <-chan struct{}
+	client                  clientset.Interface
+	kube                    kube.Interface
+	watchFactory            *factory.WatchFactory
+	egressFirewallHandler   *factory.Handler
+	extNetworkPolicyHandler *factory.Handler
+	stopChan                <-chan struct{}
 
 	// FIXME DUAL-STACK -  Make IP Allocators more dual-stack friendly
 	masterSubnetAllocator     *subnetallocator.SubnetAllocator
@@ -233,6 +236,9 @@ const (
 
 	// SCTP is the constant string for the string "SCTP"
 	SCTP = "SCTP"
+
+	// ICMP is the constant string for the string "ICMP"
+	ICMP = "ICMP"
 )
 
 func GetIPFullMask(ip string) string {
@@ -679,6 +685,32 @@ func (oc *Controller) WatchNetworkPolicy() {
 	klog.Infof("Bootstrapping existing policies and cleaning stale policies took %v", time.Since(start))
 }
 
+// WatchExtNetworkPolicy starts the watching of extnetworkpolicy resource and calls
+// back the appropriate handler logic
+func (oc *Controller) WatchExtNetworkPolicy() *factory.Handler {
+	return oc.watchFactory.AddExtNetworkPolicyHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			extnetworkpolicy := obj.(*extnetworkpolicy.ExtNetworkPolicy)
+			klog.Infof("AddExtNetwokPolicyHandler: Adding ExtNetworkPolicy %v", extnetworkpolicy)
+			oc.addExtNetworkPolicy(extnetworkpolicy)
+		},
+		UpdateFunc: func(old, newer interface{}) {
+			newpolicy := newer.(*extnetworkpolicy.ExtNetworkPolicy)
+			oldpolicy := old.(*extnetworkpolicy.ExtNetworkPolicy)
+			klog.Infof("AddExtNetwokPolicyHandler: Updating ExtNetworkPolicy from %v TO %v", oldpolicy, newpolicy)
+			if !reflect.DeepEqual(oldpolicy, newpolicy) {
+				oc.deleteExtNetworkPolicy(oldpolicy)
+				oc.addExtNetworkPolicy(newpolicy)
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			extnetworkpolicy := obj.(*extnetworkpolicy.ExtNetworkPolicy)
+			klog.Infof("AddExtNetwokPolicyHandler: Deleting ExtNetworkPolicy: %v", extnetworkpolicy)
+			oc.deleteExtNetworkPolicy(extnetworkpolicy)
+		},
+	}, oc.syncExtNetworkPolicies)
+}
+
 // WatchCRD starts the watching of the CRD resource and calls back to the
 // appropriate handler logic
 func (oc *Controller) WatchCRD() {
@@ -700,6 +732,15 @@ func (oc *Controller) WatchCRD() {
 				}
 				oc.egressFirewallHandler = oc.WatchEgressFirewall()
 			}
+			if crd.Name == extnetworkpolicyCRD {
+				err := oc.watchFactory.InitializeExtNetworkPolicyWatchFactory()
+				if err != nil {
+					klog.Errorf("Error Creating ExtNetworkPolicyWatchFactory: %v", err)
+					return
+				}
+				oc.extNetworkPolicyHandler = oc.WatchExtNetworkPolicy()
+
+			}
 		},
 		UpdateFunc: func(old, newer interface{}) {
 		},
@@ -711,6 +752,11 @@ func (oc *Controller) WatchCRD() {
 				oc.watchFactory.RemoveEgressFirewallHandler(oc.egressFirewallHandler)
 				oc.egressFirewallHandler = nil
 				oc.watchFactory.ShutdownEgressFirewallWatchFactory()
+			}
+			if crd.Name == extnetworkpolicyCRD {
+				oc.watchFactory.RemoveExtNetworkPolicyHandler(oc.extNetworkPolicyHandler)
+				oc.extNetworkPolicyHandler = nil
+				oc.watchFactory.ShutdownExtNetworkPolicyWatchFactory()
 			}
 		},
 	}, nil)

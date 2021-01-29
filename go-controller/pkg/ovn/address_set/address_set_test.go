@@ -83,10 +83,11 @@ var _ = ginkgo.Describe("OVN Address Set operations", func() {
 					Output: namespacesRes,
 				})
 
-				err = asFactory.ForEachAddressSet(func(addrSetName, namespaceName, nameSuffix string) {
+				err = asFactory.ForEachAddressSet(func(addrSetName, namespaceName, policyKind, nameSuffix string) {
 					found := false
 					for _, n := range namespaces {
 						name := n.makeName()
+						// We could explicity check for null policyKind here, but probably not needed.
 						if addrSetName == name {
 							found = true
 							gomega.Expect(namespaceName).To(gomega.Equal(n.namespace))

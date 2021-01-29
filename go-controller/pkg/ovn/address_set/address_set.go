@@ -22,7 +22,7 @@ const (
 	ipv6AddressSetSuffix = "_v6"
 )
 
-type AddressSetIterFunc func(hashedName, namespace, suffix string)
+type AddressSetIterFunc func(hashedName, namespace, kind, suffix string)
 type AddressSetDoFunc func(as AddressSet) error
 
 // AddressSetFactory is an interface for managing address set objects
@@ -83,11 +83,13 @@ func (asf *ovnAddressSetFactory) ForEachAddressSet(iteratorFn AddressSetIterFunc
 
 	processedAddressSets := sets.String{}
 	for _, line := range strings.Split(output, "\n") {
-		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
-			continue
-		}
-		for _, externalID := range strings.Fields(parts[1]) {
+		// The annotations don't seem to follow this format, so commenting out to
+		// confirm.
+		// parts := strings.Split(line, ",")
+		// if len(parts) != 2 {
+		//	continue
+		//}
+		for _, externalID := range strings.Fields(line) {
 			if !strings.HasPrefix(externalID, "name=") {
 				continue
 			}
@@ -102,11 +104,21 @@ func (asf *ovnAddressSetFactory) ForEachAddressSet(iteratorFn AddressSetIterFunc
 			processedAddressSets.Insert(addrSetName)
 			names := strings.Split(addrSetName, ".")
 			addrSetNamespace := names[0]
+			addrKind := ""
 			nameSuffix := ""
 			if len(names) >= 2 {
 				nameSuffix = names[1]
+				// This could be something like
+				// gs-policy.ingress.1_v4 for
+				// NetworkPolicy, and
+				// ext_gs-policy.ingress.1_v4 for
+				// ExtNetworkPolicy.
+				policyKind := strings.Split(nameSuffix, "_")
+				if len(policyKind) > 0 && policyKind[0] == "ext" {
+					addrKind = policyKind[0]
+				}
 			}
-			iteratorFn(addrSetName, addrSetNamespace, nameSuffix)
+			iteratorFn(addrSetName, addrSetNamespace, addrKind, nameSuffix)
 			break
 		}
 	}

@@ -58,11 +58,16 @@ func (f *FakeAddressSetFactory) ForEachAddressSet(iteratorFn AddressSetIterFunc)
 		asNames.Insert(asName)
 		parts := strings.Split(asName, ".")
 		addrSetNamespace := parts[0]
+		addrSetKind := ""
 		nameSuffix := ""
 		if len(parts) >= 2 {
 			nameSuffix = parts[1]
+			policyKind := strings.Split(nameSuffix, "_")
+			if len(policyKind) > 0 && policyKind[0] == "ext" {
+				addrSetKind = policyKind[0]
+			}
 		}
-		iteratorFn(asName, addrSetNamespace, nameSuffix)
+		iteratorFn(asName, addrSetNamespace, addrSetKind, nameSuffix)
 	}
 	return nil
 }

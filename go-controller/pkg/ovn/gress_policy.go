@@ -59,6 +59,11 @@ func (pp *portPolicy) getL4Match() (string, error) {
 			return fmt.Sprintf("sctp && sctp.dst==%d", pp.port), nil
 		}
 		return "sctp", nil
+	} else if pp.protocol == ICMP {
+		if pp.port != 0 {
+			return fmt.Sprintf("icmp4 && icmp4.type == %d", pp.port), nil
+		}
+		return "icmp4", nil
 	}
 	return "", fmt.Errorf("unknown port protocol %v", pp.protocol)
 }
@@ -300,6 +305,7 @@ func (gp *gressPolicy) localPodAddACL(portGroupName, portGroupUUID string, aclLo
 	for _, port := range gp.portPolicies {
 		l4Match, err := port.getL4Match()
 		if err != nil {
+			klog.Warningf(err.Error())
 			continue
 		}
 		match := fmt.Sprintf("match=\"%s && %s && %s\"", l3Match, l4Match, lportMatch)
@@ -439,6 +445,7 @@ func (gp *gressPolicy) localPodUpdateACL(oldl3Match, newl3Match, portGroupName s
 	for _, port := range gp.portPolicies {
 		l4Match, err := port.getL4Match()
 		if err != nil {
+			klog.Warningf(err.Error())
 			continue
 		}
 		oldMatch := fmt.Sprintf("match=\"%s && %s && %s\"", oldl3Match, l4Match, lportMatch)
