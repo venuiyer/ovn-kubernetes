@@ -9,9 +9,10 @@ groomTestList() {
 }
 
 SKIPPED_TESTS="
-# PERFORMANCE TESTS: NOT WANTED FOR CI
+# PERFORMANCE AND DISRUPTIVE TESTS: NOT WANTED FOR CI
 Networking IPerf IPv[46]
 \[Feature:PerformanceDNS\]
+Disruptive
 
 # FEATURES NOT AVAILABLE IN OUR CI ENVIRONMENT
 \[Feature:Federation\]
@@ -45,8 +46,8 @@ should resolve connection reset issue #74839
 # Broken in shared gw mode
 service endpoints using hostNetwork
 
-# Admission hook flakes
-AdmissionWebhook
+# api flakes
+sig-api-machinery
 
 # ???
 \[Feature:NoSNAT\]
