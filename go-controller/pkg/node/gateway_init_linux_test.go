@@ -246,24 +246,8 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		Eventually(fexec.CalledMatchesExpected, 5).Should(BeTrue(), fexec.ErrorDesc)
 
 		expectedTables := map[string]util.FakeTable{
-			"filter": {
-				"OUTPUT": []string{
-					"-j OVN-KUBE-EXTERNALIP",
-					"-j OVN-KUBE-NODEPORT",
-				},
-				"FORWARD": []string{
-					"-j OVN-KUBE-EXTERNALIP",
-					"-j OVN-KUBE-NODEPORT",
-				},
-				"OVN-KUBE-NODEPORT":   []string{},
-				"OVN-KUBE-EXTERNALIP": []string{},
-			},
 			"nat": {
 				"OUTPUT": []string{
-					"-j OVN-KUBE-EXTERNALIP",
-					"-j OVN-KUBE-NODEPORT",
-				},
-				"PREROUTING": []string{
 					"-j OVN-KUBE-EXTERNALIP",
 					"-j OVN-KUBE-NODEPORT",
 				},
@@ -276,8 +260,7 @@ func shareGatewayInterfaceTest(app *cli.App, testNS ns.NetNS,
 		Expect(err).NotTo(HaveOccurred())
 
 		expectedTables = map[string]util.FakeTable{
-			"filter": {},
-			"nat":    {},
+			"nat": {},
 		}
 		f6 := iptV6.(*util.FakeIPTables)
 		err = f6.MatchState(expectedTables)
@@ -431,21 +414,13 @@ func expectedIPTablesRules(gatewayIP string) map[string]util.FakeTable {
 				"-i " + localnetGatewayNextHopPort + " -m comment --comment from OVN to localhost -j ACCEPT",
 			},
 			"FORWARD": []string{
-				"-j OVN-KUBE-EXTERNALIP",
-				"-j OVN-KUBE-NODEPORT",
 				"-o " + localnetGatewayNextHopPort + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
 				"-i " + localnetGatewayNextHopPort + " -j ACCEPT",
 			},
-			"OVN-KUBE-NODEPORT":   []string{},
-			"OVN-KUBE-EXTERNALIP": []string{},
 		},
 		"nat": {
 			"POSTROUTING": []string{
 				"-s " + gatewayIP + " -j MASQUERADE",
-			},
-			"PREROUTING": []string{
-				"-j OVN-KUBE-EXTERNALIP",
-				"-j OVN-KUBE-NODEPORT",
 			},
 			"OUTPUT": []string{
 				"-j OVN-KUBE-EXTERNALIP",

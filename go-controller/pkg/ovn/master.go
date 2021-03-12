@@ -446,6 +446,17 @@ func (oc *Controller) SetupMaster(masterNodeName string) error {
 		}
 	}
 
+	// Create load balancers
+
+	// If we enable idling we have to set the option before creating the loadbalancers
+	if config.Kubernetes.OVNEmptyLbEvents {
+		_, _, err := util.RunOVNNbctl("set", "nb_global", ".", "options:controller_event=true")
+		if err != nil {
+			klog.Error("Unable to enable controller events. Unidling not possible")
+			return err
+		}
+	}
+
 	// Create 3 load-balancers for east-west traffic for UDP, TCP, SCTP
 	oc.TCPLoadBalancerUUID, stderr, err = util.RunOVNNbctl("--data=bare", "--no-heading", "--columns=_uuid", "find", "load_balancer", "external_ids:k8s-cluster-lb-tcp=yes")
 	if err != nil {
@@ -784,7 +795,7 @@ func (oc *Controller) ensureNodeLogicalNetwork(nodeName string, hostSubnets []*n
 				stdout, stderr, err = util.RunOVNNbctl("set", "logical_switch",
 					nodeName, "other-config:mcast_querier=\"true\"",
 					"other-config:mcast_eth_src=\""+nodeLRPMAC.String()+"\"",
-					"other-config:mcast_ip6_src=\""+v6Gateway.String()+"\"")
+					"other-config:mcast_ip6_src=\""+util.HWAddrToIPv6LLA(nodeLRPMAC).String()+"\"")
 				if err != nil {
 					klog.Errorf("Failed to enable MLD Querier on logical switch %v, stdout: %q, stderr: %q, error: %v",
 						nodeName, stdout, stderr, err)
@@ -1055,8 +1066,7 @@ func (oc *Controller) deleteNodeLogicalNetwork(nodeName string) error {
 	return nil
 }
 
-func (oc *Controller) deleteNode(nodeName string, hostSubnets []*net.IPNet,
-	nodeLocalNatIPs []net.IP) error {
+func (oc *Controller) deleteNode(nodeName string, hostSubnets []*net.IPNet, nodeLocalNatIPs []net.IP) {
 	// Clean up as much as we can but don't hard error
 	for _, hostSubnet := range hostSubnets {
 		if err := oc.deleteNodeHostSubnet(nodeName, hostSubnet); err != nil {
@@ -1085,18 +1095,16 @@ func (oc *Controller) deleteNode(nodeName string, hostSubnets []*net.IPNet,
 	}
 
 	if err := gatewayCleanup(nodeName); err != nil {
-		return fmt.Errorf("failed to clean up node %s gateway: (%v)", nodeName, err)
+		klog.Errorf("Failed to clean up node %s gateway: (%v)", nodeName, err)
 	}
 
 	if err := oc.joinSwIPManager.releaseJoinLRPIPs(nodeName); err != nil {
-		return err
+		klog.Errorf("Failed to clean up GR LRP IPs for node %s: %v", nodeName, err)
 	}
 
 	if err := oc.deleteNodeChassis(nodeName); err != nil {
-		return err
+		klog.Errorf("Failed to remove the chassis associated with node %s in the OVN SB Chassis table", nodeName, err)
 	}
-
-	return nil
 }
 
 // OVN uses an overlay and doesn't need GCE Routes, we need to
@@ -1152,23 +1160,36 @@ func (oc *Controller) clearInitialNodeNetworkUnavailableCondition(origNode, newN
 }
 
 // delete chassis of the given nodeName/chassisName map
+// from chassis & chassis_private table
 func deleteChassis(ovnSBClient goovn.Client, chassisMap map[string]string) {
 	cmds := make([]*goovn.OvnCommand, 0, len(chassisMap))
 	for chassisHostname, chassisName := range chassisMap {
 		if chassisName != "" {
 			klog.Infof("Deleting stale chassis %s (%s)", chassisHostname, chassisName)
-			cmd, err := ovnSBClient.ChassisDel(chassisName)
+			chassisDelCmd, err := ovnSBClient.ChassisDel(chassisName)
 			if err != nil {
 				klog.Errorf("Unable to create the ChassisDel command for chassis: %s from the sbdb", chassisName)
 			} else {
-				cmds = append(cmds, cmd)
+				cmds = append(cmds, chassisDelCmd)
+			}
+			// check for chassis_private table in schema and
+			// if present, delete corresponding chassis row in chassis_private table
+			sbDbSchema := ovnSBClient.GetSchema()
+			if _, ok := sbDbSchema.Tables[goovn.TableChassisPrivate]; ok {
+				chassisPrivateDelCmd, err := ovnSBClient.ChassisPrivateDel(chassisName)
+				if err != nil {
+					klog.Errorf("Unable to create the ChassisPrivateDel command for chassis: %s from the sbdb", chassisName)
+				} else {
+					cmds = append(cmds, chassisPrivateDelCmd)
+				}
 			}
 		}
 	}
 
 	if len(cmds) != 0 {
 		if err := ovnSBClient.Execute(cmds...); err != nil {
-			klog.Errorf("Failed to delete chassis for node/chassis map %v: error: %v", chassisMap, err)
+			klog.Errorf("Failed to delete chassis row from chassis & chassis_private table "+
+				"for node/chassis map %v: error: %v", chassisMap, err)
 		}
 	}
 }
@@ -1282,9 +1303,7 @@ func (oc *Controller) syncNodes(nodes []interface{}) {
 			continue
 		}
 
-		if err := oc.deleteNode(nodeName, subnets, nil); err != nil {
-			klog.Error(err)
-		}
+		oc.deleteNode(nodeName, subnets, nil)
 		//remove the node from the chassis map so we don't delete it twice
 		delete(chassisMap, nodeName)
 	}
@@ -1306,12 +1325,24 @@ func (oc *Controller) deleteNodeChassis(nodeName string) error {
 			klog.Warningf("Chassis name is empty for node: %s", nodeName)
 			continue
 		}
-		cmd, err := oc.ovnSBClient.ChassisDel(chassis.Name)
+		chDeleteCmd, err := oc.ovnSBClient.ChassisDel(chassis.Name)
 		if err != nil {
 			return fmt.Errorf("unable to create the ChassisDel command for chassis: %s", chassis.Name)
+		} else {
+			cmds = append(cmds, chDeleteCmd)
+		}
+		// check for chassis_private table in db-schema and
+		// if present, delete corresponding chassis row from chassis_private table
+		sbDbSchema := oc.ovnSBClient.GetSchema()
+		if _, ok := sbDbSchema.Tables[goovn.TableChassisPrivate]; ok {
+			chPrivateDeleteCmd, err := oc.ovnSBClient.ChassisPrivateDel(chassis.Name)
+			if err != nil {
+				return fmt.Errorf("unable to create the ChassisPrivateDel command for chassis: %s", chassis.Name)
+			} else {
+				cmds = append(cmds, chPrivateDeleteCmd)
+			}
 		}
 		chNames = append(chNames, chassis.Name)
-		cmds = append(cmds, cmd)
 	}
 
 	if len(cmds) == 0 {
@@ -1319,8 +1350,8 @@ func (oc *Controller) deleteNodeChassis(nodeName string) error {
 	}
 
 	if err = oc.ovnSBClient.Execute(cmds...); err != nil {
-		return fmt.Errorf("failed to delete chassis %q for node %s: error: %v",
-			strings.Join(chNames, ","), nodeName, err)
+		return fmt.Errorf("failed to delete chassis row %q from chassis & chassis_private table "+
+			"for node %s: error: %v", strings.Join(chNames, ","), nodeName, err)
 	}
 	return nil
 }
