@@ -140,11 +140,9 @@ spec:
         - mountPath: /etc/ovn/
           name: host-var-lib-ovs
           readOnly: true
-        {% if kind is defined and kind -%}
         - mountPath: /var/run/netns
           name: host-netns
           mountPropagation: Bidirectional
-        {% endif %}
 
         resources:
           requests:
@@ -201,6 +199,12 @@ spec:
           value: "{{ ovn_hybrid_overlay_net_cidr }}"
         - name: OVN_DISABLE_SNAT_MULTIPLE_GWS
           value: "{{ ovn_disable_snat_multiple_gws }}"
+        - name: OVN_NETFLOW_TARGETS
+          value: "{{ ovn_netflow_targets }}"
+        - name: OVN_SFLOW_TARGETS
+          value: "{{ ovn_sflow_targets }}"
+        - name: OVN_IPFIX_TARGETS
+          value: "{{ ovn_ipfix_targets }}"
         - name: OVN_V4_JOIN_SUBNET
           value: "{{ ovn_v4_join_subnet }}"
         - name: OVN_V6_JOIN_SUBNET
@@ -294,11 +298,9 @@ spec:
       - name: host-var-lib-ovs
         hostPath:
           path: /var/lib/openvswitch
-      {% if kind is defined and kind -%}
       - name: host-netns
         hostPath:
           path: /var/run/netns
-      {% endif %}
 
       tolerations:
       - operator: "Exists"
